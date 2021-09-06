@@ -11,6 +11,7 @@ from . import utils
 from . import spec_help
 from . import rotbroad_help
 from . import target
+from . import fitting_utils
 DIRNAME = os.path.dirname(__file__)
 PATH_FLAT_DEBLAZED = os.path.join(DIRNAME,"data/hpf/flats/alphabright_fcu_sept18_deblazed.fits")
 PATH_FLAT_BLAZED = os.path.join(DIRNAME,"data/hpf/flats/alphabright_fcu_sept18.fits")
@@ -325,6 +326,250 @@ class HPFSpectrum(object):
         ax.set_xlabel('Wavelength [A]')
         ax.set_ylabel('Flux')
         ax.set_xlim(np.nanmin(self.w[o]),np.nanmax(self.w[o]))
+
+    def find_peaks_order(self,oi,fl=None,w=None,prominence=0.1,width=(0,8),
+                         pixel_to_wl_interpolation_kind='cubic',fill_value=np.nan,
+                         fit_width_kms=None):
+        """ Find peaks in a spectral order
+        
+        Use the scipy.signal.find_peaks routine to locate lines in a spectral order.
+        Defaults to using f_debl and stellar rest frame wavelengths.
+        Presently the precision is only pixel-level, so interpolation is overkill.
+        
+        Parameters
+        ----------
+        oi : {int}
+            Order index
+        fl : {ndarray}, optional
+            1D array of fluxes. if provided, oi is ignored
+        w : {ndarray}, optional
+            1D array of wavelengths [ang]. if provided, oi is ignored
+        prominence : {float}, optional
+            Height above surroundings. Argument to scipy.signal.find_peaks (the default is 0.1)
+        width : {tuple}, optional
+            Bounds on peak width. Argument to scipy.signal.find_peaks (the default is (0,8))
+        pixel_to_wl_interpolation_kind : {str}, optional
+            Interpolation to use for converting pixels to wavelength (the default is 'cubic')
+        fill_value : {number}, optional
+            Fill value in interpolation (the default is np.nan)
+        fit_width_kms : {float}, optional
+            Fit the lines to find a more precise centroid. [km/s]
+            Skip this by not providing a number.
+        """
+        if fl is None:
+            fl = self.f_debl[oi]
+        if w is None:
+            w = self.w_shifted[oi]
+        # Find pixel centers and interpolate to wavelength values
+        pixel_peaks = scipy.signal.find_peaks(-fl,prominence=prominence,width=width)[0] # propertes in [1]
+        xx = np.arange(2048)
+        wl_peaks = scipy.interpolate.interp1d(xx,w,kind=pixel_to_wl_interpolation_kind,fill_value=fill_value,bounds_error=False)(pixel_peaks)
+
+        # If fit is not requested (i.e. fit_width_kms is None), just return pixel centers
+        if fit_width_kms is None:
+            return(wl_peaks)
+        
+        # Fit the centers using simple assumptions
+        fitted_centers = []
+        dwl_pix = np.nanmedian(np.diff(w))
+        dv_pix = dwl_pix / np.nanmedian(w) * 3e5
+        fit_width_pix = fit_width_kms / dv_pix
+        for pi,wi in zip(pixel_peaks,wl_peaks):
+            fitout = fitting_utils.fitProfile(w,fl,pi,fit_width_pix,func='fgauss_const',p0=[wi,-0.1,1.,1.])
+            fitted_centers.append(fitout['centroid'])
+        fitted_centers = np.array(fitted_centers)
+        return(fitted_centers)
+
+    def fit_peaks_order(self,oi,wl_peaks,fl=None,w=None,
+                         pixel_to_wl_interpolation_kind='cubic',fill_value=np.nan,
+                         fit_width_kms=8.):
+        """ Fit peaks in a spectral order
+        
+        If you already have peaks roughly located in wavelength, use this routine to
+        fit their locations more precisely.
+        
+        Parameters
+        ----------
+        oi : {int}
+            Order index
+        wl_peaks : [list]
+            List of peak wavelengths in angstroms
+        fl : {ndarray}, optional
+            1D array of fluxes. if provided, oi is ignored
+        w : {ndarray}, optional
+            1D array of wavelengths [ang]. if provided, oi is ignored
+        pixel_to_wl_interpolation_kind : {str}, optional
+            Interpolation to use for converting pixels to wavelength (the default is 'cubic')
+        fill_value : {number}, optional
+            Fill value in interpolation (the default is np.nan)
+        fit_width_kms : {float}, optional
+            Fit the lines to find a more precise centroid. [km/s]
+            Skip this by not providing a number.
+        """
+        if fl is None:
+            fl = self.f_debl[oi]
+        if w is None:
+            w = self.w_shifted[oi]
+        # Find pixel centers and interpolate to wavelength values
+        #pixel_peaks = scipy.signal.find_peaks(-fl,prominence=prominence,width=width)[0] # propertes in [1]
+        xx = np.arange(2048)
+        pixel_peaks = scipy.interpolate.interp1d(w,xx,kind=pixel_to_wl_interpolation_kind,fill_value=fill_value,bounds_error=False)(wl_peaks)
+        #wl_peaks = scipy.interpolate.interp1d(xx,w,kind=pixel_to_wl_interpolation_kind,fill_value=fill_value,bounds_error=False)(pixel_peaks)
+
+        # If fit is not requested (i.e. fit_width_kms is None), just return pixel centers
+        if fit_width_kms is None:
+            return(wl_peaks)
+        
+        # Fit the centers using simple assumptions
+        fitted_centers = []
+        dwl_pix = np.nanmedian(np.diff(w))
+        dv_pix = dwl_pix / np.nanmedian(w) * 3e5
+        fit_width_pix = fit_width_kms / dv_pix
+        for pi,wi in zip(pixel_peaks,wl_peaks):
+            fitout = fitting_utils.fitProfile(w,fl,pi,fit_width_pix,func='fgauss_const',p0=[wi,-0.1,1.,1.])
+            fitted_centers.append(fitout['centroid'])
+        fitted_centers = np.array(fitted_centers)
+        return(fitted_centers)
+    
+    def measure_ew(self,lower=None,upper=None,feature=None,w=None,fl=None,diag=False,const_continuum_regions=[],
+                   slope_continuum_regions=[]):
+        if ((lower is None) or (upper is None)) and (feature is None):
+            raise ValueError
+        if feature is not None:
+            lower = feature.lower.value
+            upper = feature.upper.value
+
+        if fl is None:
+            fl = self.f_debl
+        if w is None:
+            w = self.w_shifted
+        norders, npix = np.shape(fl)
+
+        for oi in range(norders):
+            wls = w[oi]
+            omin, omax = np.nanmin(wls), np.nanmax(wls)
+            if (lower > omin) and (upper < omax):
+                o_use = oi
+                #print('Using oi {}'.format(oi))
+                break
+        if o_use is None:
+            raise ValueError('Feature not entirely in orders')
+        fl_use = fl[o_use]
+        wl_use = w[o_use]
+
+        if len(slope_continuum_regions) > 0:
+            print('Renormalizing to slope')
+            ci_use = []
+            for clim in slope_continuum_regions:
+                lower_lim = clim[0]
+                upper_lim = clim[1]
+                tmp_i = np.nonzero((wl_use >= lower_lim) & (wl_use <= upper_lim))[0]
+                if len(tmp_i) > 0:
+                    for j in tmp_i:
+                        ci_use.append(j)
+                else:
+                    print('No suitable pixels found for {:.2f} to {:.2f}'.format(lower_lim,upper_lim))
+            ww_fit = wl_use[ci_use]
+            ff_fit = fl_use[ci_use]
+            pp = np.polyfit(ww_fit,ff_fit,1)
+            norm = np.polyval(pp,wl_use)
+            fl_use = fl_use / norm
+        elif len(const_continuum_regions) > 0:
+            print('Renormalizing to constant value')
+            ci_use = []
+            for clim in const_continuum_regions:
+                lower_lim = clim[0]
+                upper_lim = clim[1]
+                tmp_i = np.nonzero((wl_use >= lower_lim) & (wl_use <= upper_lim))[0]
+                if len(tmp_i) > 0:
+                    for j in tmp_i:
+                        ci_use.append(j)
+                else:
+                    print('No suitable pixels found for {:.2f} to {:.2f}'.format(lower_lim,upper_lim))
+            if len(ci_use) > 0:
+                new_norm = astropy.stats.biweight_location(fl_use[ci_use])
+                print('New norm: {:.3}'.format(new_norm))
+                fl_use = fl_use / new_norm
+            else:
+                print('No renorm pixels found, skipping')
+
+        out = spec_help.calculate_ew(wl_use,fl_use,lower,upper)
+
+        if not diag:
+            return(out)
+        else:
+            inds = np.nonzero( (wl_use > lower) & (wl_use < upper) )
+            outdict = {'ew':out,
+                       'order':o_use,
+                       'inds':inds}
+            return(outdict)
+
+    def which_order(self,wavelength):
+        ''' Say which order a wavelength falls in
+        
+        Parameters
+        ----------
+        wavelength : float
+            wavelength to query
+        '''
+        wmins = np.nanmin(self.w_shifted,axis=1)
+        wmaxs = np.nanmax(self.w_shifted,axis=1)
+        for oi in range(28):
+            if (wavelength > wmins[oi]) and (wavelength < wmaxs[oi]):
+                return(oi)
+        return(None)
+
+    def jitter_spectrum(self):
+        ''' Jitter the spectrum by the given variance
+        
+        Jitter each pixel's slope value by the pipeline-reported variance.
+        Make sure to do this on a copy of the original spectrum - the 
+        flux values will be permanently changed for this object.
+
+        The object then re-does the ingestion of the spectrum (flattening, deblazing)
+        '''
+        # self.header = inp[0].header.copy()
+        # self.sci_slope = inp[1].data.copy()
+        # self.sky_slope = inp[2].data.copy()
+        # self.cal_slope = inp[3].data.copy()
+        # self.sci_variance = inp[4].data.copy()
+        # self.sky_variance = inp[5].data.copy()
+        # self.cal_variance = inp[6].data.copy()
+        # self.sci_wave = inp[7].data.copy()
+        # self.sky_wave = inp[8].data.copy()
+        # self.cal_wave = inp[9].data.copy()
+        # if keepsciHDU:
+        #     self.hdu = inp
+        # else:
+        #     inp.close()
+        shape = np.shape(self.sci_slope)
+        jitter_sci = default_rng().normal(0,np.sqrt(self.sci_variance),shape)
+        jitter_cal = default_rng().normal(0,np.sqrt(self.cal_variance),shape)
+        jitter_sky = default_rng().normal(0,np.sqrt(self.sky_variance),shape)
+        self.sci_slope = self.sci_slope + jitter_sci
+        self.cal_slope = self.cal_slope + jitter_cal
+        self.sky_slope = self.sky_slope + jitter_sky
+
+        # Turn slopes into fluxes
+        self.sci_err = np.sqrt(self.sci_variance)*self.exptime
+        self.sky_err = np.sqrt(self.sky_variance)*self.exptime
+        self.cal_err = np.sqrt(self.cal_variance)*self.exptime
+
+        self.sci_and_sky_err = np.sqrt(self.sci_variance + self.sky_variance)*self.exptime
+
+        self.f_sci = self.sci_slope / self.flat_sci_slope * self.exptime
+        self.f_sky = self.sky_slope / self.flat_sky_slope * self.exptime #* self.SKY_SCALING_FACTOR
+        self.f_cal = self.cal_slope / self.flat_cal_slope * self.exptime
+
+        self.f_sci_sky = self.f_sci - self.f_sky
+
+        self.sn18 = self.snr_order_median(18)
+
+
+        self.deblaze(norm_percentile_per_order=80.)
+
+
+        print('Spectrum Jittered (automatically deblazed)')
 
 
 class HPFSpecList(object):

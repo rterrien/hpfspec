@@ -18,6 +18,7 @@ import astropy.time
 import astropy.io
 import crosscorr
 import hpfspec
+import spectres
 from . import utils
 from . import rv_utils
 from . import rotbroad_help
@@ -905,3 +906,162 @@ def vsini_from_hpf_spectra(ftarg,fcal,eps=0.6,
         print("Saved to {}".format(savename))
     
     return vmean, vsigma
+
+def resample_interpolate(x,y,x_new,kind='cubic',fill_value=np.nan):
+    """ Simple interpolation-based resampling
+    
+    Just a wrapper around scipy.interpolate.interp1d.
+    
+    Parameters
+    ----------
+    x : {ndarray}
+        X-values to interpolate
+    y : {ndarray}
+        y-values to interpolate
+    x_new : {ndarray}
+        x-values to interpolate at
+    kind : {str}, optional
+        Kind of interpolation, argument to scipy.interpolate.interp1d. defaults to 'cubic'
+    fill_value : {float}, optional
+        Fill value for places where interpolation fails - defaults to np.nan
+    """
+    # Mask NaN
+    mask = np.ma.masked_invalid(y)
+    x_use = x[~mask.mask]
+    y_use = y[~mask.mask]
+    # Interpolate
+    interp_func = scipy.interpolate.interp1d(x_use,y_use,kind=kind,fill_value=fill_value,bounds_error=False)
+    return(interp_func(x_new))
+
+def resample_to_median_sampling(x,y,e=None,kind='FluxConservingSpectRes',fill_value=np.nan,upsample_factor=1.):
+    """ General-purpose resampling.
+    
+    Resampling routine, can do flux-conserving "spectres" resampling or simple interpolation.
+    
+    Parameters
+    ----------
+    x : {ndarray}
+        X-values to interpolate [if spectrum, in ang]
+    y : {ndarray}
+        y-values to interpolate
+    e : {ndarray}, optional
+        "error" array to resample - this is only relevant for kind=FluxConservingSpectRes, which assumes
+        a spectrum in flux vs wavelength, and an error array.
+    kind : {str}, optional
+        Kind of resampling/interpolation. Defaults to 'FluxConservingSpectRes'.
+        Also valid: any "kind" for scipy.interpolate.interp1d
+    fill_value : {float}, optional
+        Fill value for places where interpolation fails - defaults to np.nan
+    upsample_factor : {float}, optional
+        Up or down-sample a spectrum - defaults to 1. which is no change
+    """
+    # Find median size of x-bins, range, and number of points used
+    x_min = np.nanmin(x)
+    x_max = np.nanmax(x)
+    med_dx = np.nanmedian(np.diff(x))
+    if not isinstance(upsample_factor,int):
+        upsample_factor = int(upsample_factor)
+        print("Warning: Upsample factor converted to int")
+    # How many points are required to span the same range, with median sampling * upsample factor
+    n_pts = int((x_max - x_min) / med_dx) * upsample_factor
+    x_new = np.linspace(x_min,x_max,n_pts)
+    if kind in ['linear','nearest','zero','slinear','quadratic','cubic','previous','next']:
+        out = resample_interpolate(x,y,x_new,kind=kind,fill_value=fill_value)
+    elif kind in ['FluxConservingSpectRes']:
+        out = spectres.spectres(x_new, x, y, spec_errs=e, verbose=False)
+        if e is not None:
+            out, out_err = out[0], out[1]
+            return(x_new,out,out_err)
+    return(x_new,out)
+
+def resample_combine(wl_base,wlarr,flarr,combine_type='biweight',sigma_clip=5.):
+    """ Resample and combine spectra.
+    
+    Convenience function to resample and combine a bunch of spectra.
+    
+    Parameters
+    ----------
+    wl_base : {ndarray}
+        Base wavelength array, to resample on [ang]
+    wlarr : {ndarray} (n_specs x 2048)
+        Wavelength array for all spectra to combine [ang] 
+    flarr : {ndarray} (n_specs x 2048)
+        Flux array for all spectra
+    combine_type : {str}, optional
+        How to combine spectra - ['biweight','mean','median','sigmaclippedmean','sigmaclippedmedian'] 
+        (the default is 'biweight')
+    sigma_clip : {float}, optional
+        For sigma-clipped combinations, the clip limit (the default is 5.)
+    """
+    n_specs = len(flarr)
+    n_wls = len(wl_base)    
+    fullarr = np.full((n_specs,n_wls),np.nan)
+    # For each spectrum, resample to the array provided in wl_base
+    for si in range(n_specs):
+        resampled_fl = spectres.spectres(wl_base,wlarr[si],flarr[si],verbose=False)
+        fullarr[si,:] = resampled_fl
+
+    # Combine spectra
+    if combine_type == 'biweight':
+        out = astropy.stats.biweight.biweight_location(fullarr,axis=0,ignore_nan=True)
+    elif combine_type == 'mean':
+        out = np.nanmean(fullarr,axis=0)
+    elif combine_type == 'median':
+        out = np.nanmedian(fullarr,axis=0)
+    elif combine_type == 'sigmaclippedmean':
+        mask = np.ma.masked_invalid(fullarr)
+        out = astropy.stats.sigma_clipped_stats(fullarr,mask=mask,axis=0,sigma=sigma_clip)[0]
+    elif combine_type == 'sigmaclippedmedian':
+        mask = np.ma.masked_invalid(fullarr)
+        out = astropy.stats.sigma_clipped_stats(fullarr,mask=mask,axis=0,sigma=sigma_clip)[1]
+    else:
+        raise(UnhandledException('Invalid combine type'))
+    return(out)
+
+def calculate_ew(wl,fl,limit_left,limit_right):
+    # this amounts to calculating INT(1 - F / F_continuum)*d_wl with the bounds as the feature limits
+    # our F_continuum is assumed to be 0 and we have a discrete sampling so use a sum
+    
+    # for now just force it to be that we have the feature entirely within the bounds
+    assert limit_left > np.nanmin(wl)
+    assert limit_right < np.nanmax(wl)
+    
+    # need to calculate the wavelength bin sizes to match against limits
+    # each wavelength bin has a center, left, and right. We assume that we are given the center
+    # need to calculate left and right
+    bin_size = np.diff(wl)
+    # assuming that the bin size doesn't change meaningfully from one bin to the next one
+    bin_size = np.concatenate(([bin_size[0]],bin_size))
+    bin_left = wl - bin_size/2.
+    bin_right = wl + bin_size/2.
+    
+    # check to make sure which pixels are finite (i.e. not NaN) values to work with
+    condition_finite = np.isfinite(fl)
+    
+    # handle pixels entirely within the bounds:
+    condition_all_in = (bin_left >= limit_left) & (bin_right <= limit_right)
+    
+    # select the pixels that are finite and those that are all in
+    use = np.nonzero(condition_finite & condition_all_in)[0]
+    wluse = wl[use]
+    fluse = fl[use]
+    
+    # recalculate bin boundaries, just in case we lost any pixels due to NaN
+    bins = np.diff(wluse)
+    bins = np.concatenate(([bins[0]],bins))
+    
+    # do the calculation and sum
+    sub = (1. - fluse) * bins
+    
+    # add the left extra bin
+    leftmost_index = use[0]
+    left_extra_bin = bin_right[leftmost_index-1] - limit_left
+    left_extra_val = (1. - fl[leftmost_index-1]) * left_extra_bin
+    #print(use)
+    
+    # right extra bin
+    rightmost_index = use[-1]
+    right_extra_bin = limit_right - bin_left[rightmost_index+1]
+    right_extra_val = (1. - fl[rightmost_index+1]) * right_extra_bin
+    
+    return(np.sum(sub) + left_extra_val + right_extra_val)
