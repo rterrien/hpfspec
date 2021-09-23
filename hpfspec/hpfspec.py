@@ -6,6 +6,7 @@ import astropy.io
 import scipy.interpolate
 import os
 import crosscorr
+from collections import OrderedDict
 from . import stats_help
 from . import utils
 from . import spec_help
@@ -36,7 +37,8 @@ class HPFSpectrum(object):
     path_ccf_mask = PATH_CCF_MASK
     path_wavelength_solution = PATH_WAVELENGTH
     
-    def __init__(self,filename,targetname='',deblaze=True,ccf_redshift=True,tell_err_factor=1.,sky_err_factor=1.,sky_scaling_factor=1.0):
+    def __init__(self,filename,targetname='',deblaze=True,ccf_redshift=True,tell_err_factor=1.,sky_err_factor=1.,sky_scaling_factor=1.0,
+                auto_renorm=True):
         self.filename = filename
         self.basename = filename.split(os.sep)[-1]
         self.sky_scaling_factor = sky_scaling_factor
@@ -247,6 +249,28 @@ class HPFSpectrum(object):
         for i in range(28): 
             self.f_debl[i] = self.f_debl[i]/np.nanmedian(self.f_debl[i])
         self.e_debl = self.f_debl/self.sn
+
+    def renormalize_simple(self,which='f_debl'):
+        """
+        Use a simple renormalization technique to flatten the orders.
+        Maxfilter -> Gaussfilter
+        """
+        if which not in ['f_debl','f_sci_debl','f_sky_debl','f_sci','f_cal','f_sky']:
+            raise(ValueError)
+        fluxToCorrect = getattr(self,which)
+        fluxCorrected = np.full_like(fluxToCorrect,np.nan)
+        trends = np.full_like(fluxToCorrect,np.nan)
+        for oi in range(28):
+            flux = fluxToCorrect[oi,:]
+            corrected, trend = spec_help.detrend_maxfilter_gaussian(flux,n_max=300,n_gauss=500)
+            fluxCorrected[oi,:] = corrected
+            trends[oi,:] = trend
+        if hasattr(self,'trends_removed'):
+            self.trends_removed[which] = trends
+        else:
+            self.trends_removed = OrderedDict()
+            self.trends_removed[which] = trends
+        setattr(self,which,fluxCorrected)
             
     def redshift(self,berv=None,rv=None):
         """
