@@ -116,6 +116,9 @@ class HPFSpectrum(object):
             self.deblaze()
         #self.hdu.close()
 
+        if auto_renorm:
+            self.renormalize_simple()
+
 
     def __repr__(self):
         return 'HPFSpec({},sn18={:0.1f})'.format(self.object,self.sn18)
