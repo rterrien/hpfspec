@@ -224,7 +224,7 @@ def gaussian_filter1d_ignore_nan(array,sigma,Gaussian1DKernel_kwargs={},convolve
     return conv
 
 
-def detrend_maxfilter_gaussian(flux,n_max=200,n_gauss=500,plot=False):
+def detrend_maxfilter_gaussian(flux,n_max=400,n_gauss=500,plot=False):
     """
     A function useful to estimate spectral continuum
 
