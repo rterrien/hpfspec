@@ -243,7 +243,7 @@ def detrend_maxfilter_gaussian(flux,n_max=300,n_gauss=500,plot=False):
     #flux_filt = scipy.ndimage.filters.maximum_filter1d(flux,n_max)
     flux_filt = maximum_filter_ignore_nan(flux,n_max)
     #trend = scipy.ndimage.filters.gaussian_filter1d(flux_filt,sigma=n_gauss)
-    trend = gaussian_filter1d_ignore_nan(flux_filt,n_gauss,convolve_kwargs={'fill_value':1})
+    trend = gaussian_filter1d_ignore_nan(flux_filt,n_gauss,convolve_kwargs={'boundary':'extend'})
     if plot:
         fig, ax = plt.subplots()
         ax.plot(flux)
