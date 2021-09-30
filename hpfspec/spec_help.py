@@ -219,7 +219,7 @@ def maximum_filter_ignore_nan(array, *args, **kwargs):
     return scipy.ndimage.filters.maximum_filter(replaced, *args, **kwargs)
 
 def gaussian_filter1d_ignore_nan(array,sigma,**kwargs):
-    kern = astropy.convolution.Guassian1DKernel(sigma,**kwargs)
+    kern = astropy.convolution.Gaussian1DKernel(sigma,**kwargs)
     conv = astropy.convolution.convolve(array,kern)
     return conv
 
