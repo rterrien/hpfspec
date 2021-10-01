@@ -13,6 +13,7 @@ from . import spec_help
 from . import rotbroad_help
 from . import target
 from . import fitting_utils
+from . import model_utils
 DIRNAME = os.path.dirname(__file__)
 PATH_FLAT_DEBLAZED = os.path.join(DIRNAME,"data/hpf/flats/alphabright_fcu_sept18_deblazed.fits")
 PATH_FLAT_BLAZED = os.path.join(DIRNAME,"data/hpf/flats/alphabright_fcu_sept18.fits")
