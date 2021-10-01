@@ -2,7 +2,7 @@ import numpy as np
 import astropy.convolution.kernels
 from PyAstronomy import pyasl
 import spectres
-from hpfspec2 import spec_help
+from hpfspec import spec_help
 
 def read_btsettl(fname, minl, maxl,upsample=1.):
     ''' read in a BT-Settl model spectrum file
