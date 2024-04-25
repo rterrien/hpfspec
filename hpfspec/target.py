@@ -5,9 +5,11 @@ import matplotlib.pyplot as plt
 import configparser
 import os
 from astroquery.mast import Catalogs
+from astropy.time import Time
+from six.moves.urllib.request import urlopen
 from . import bary
-DIRNAME = os.path.dirname(__file__)
-PATH_TARGETS = os.path.join(DIRNAME,'data/target_files')
+DIRNAME = '' #os.path.dirname(__file__)
+PATH_TARGETS = os.path.join(DIRNAME,'targets')
 
 class Target(object):
     """
@@ -44,6 +46,9 @@ class Target(object):
             if 'TIC' in name:
                 print('Querying TIC for data')
                 self.data = self.query_tic(name)
+            elif 'TOI' in name:
+                print('Querying TOI list for data')
+                self.data = self.query_toi(name)
             else:
                 print('Querying SIMBAD for data')
                 self.data, self.warning = barycorrpy.utils.get_stellar_data(name)
@@ -54,12 +59,16 @@ class Target(object):
         self.pmdec = self.data['pmdec']
         self.px = self.data['px']
         self.epoch = self.data['epoch']
-        if self.data['rv'] is None:
+        if (self.data['rv'] is None) | (self.data['rv'] == np.nan):
             self.rv = 0.
         else:
+<<<<<<< HEAD
             self.rv = self.data['rv']/1000.# if self.data['rv'] < 1e20 else 0.
         self.obsname = obsname
 
+=======
+            self.rv = self.data['rv']/1000.
+>>>>>>> c99c300c6901b7d105d72026fbec3f0edbc504f5
 
     def query_tic(self,ticname):
         """
@@ -73,7 +82,25 @@ class Target(object):
         data['pmra'] = df.pmRA.values[0]
         data['pmdec'] = df.pmDEC.values[0]
         data['px'] = df.plx.values[0]
-        data['epoch'] = 2451545.0
+        data['epoch'] = Time(2015.5, format = 'decimalyear').jd if (df.loc[0,'PMflag'] == 'gaia2') else 2451545.0
+        data['rv'] = 0.
+        return data
+
+    def query_toi(self,ticname):
+        """
+        Query the TESS Object of Interest Catalog for data
+        """
+        name = toiname.replace('-',' ').replace('_',' ')
+        toicat = pd.read_csv(urlopen('https://exofop.ipac.caltech.edu/tess/download_toi.php?sort=toi&output=pipe'),sep='|',comment='#')
+        toicat = toicat[np.isin(toicat.TOI.values.astype(int),[int(name.split()[-1])])].reset_index(drop=True)
+        df = Catalogs.query_object('TIC {:0.0f}'.format(toicat.loc[0,'TIC ID']), radius=0.0003, catalog="TIC").to_pandas()[0:1]
+        data = {}
+        data['ra'] = df.ra.values[0]
+        data['dec'] = df.dec.values[0]
+        data['pmra'] = df.pmRA.values[0]
+        data['pmdec'] = df.pmDEC.values[0]
+        data['px'] = df.plx.values[0]
+        data['epoch'] = Time(2015.5, format = 'decimalyear').jd if (df.loc[0,'PMflag'] == 'gaia2') else 2451545.0
         data['rv'] = 0.
         return data
 
