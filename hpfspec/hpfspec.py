@@ -369,7 +369,7 @@ class HPFSpectrum(object):
         if np.isin(list(self.header.keys()),'BLAZEFL').max():
             #hdu = astropy.io.fits.open( '/storage/group/sqm107/default/HPFPipeline/APCP/NewExtractionModule/{}'.format(self.hdu[0].header['BLAZEFL']) )
             #data/hpf/flats/
-            self.path_flat_blazed = os.path.join(DIRNAME,self.hdu[0].header['BLAZEFL'])
+            self.path_flat_blazed = os.path.join(DIRNAME,'data','hpf','flats',self.hdu[0].header['BLAZEFL'])
             hdu = astropy.io.fits.open(self.path_flat_blazed)
             self.f_sci_debl = self.hdu[1].data*self.exptime/hdu[1].data
             self.f_sky_debl = self.hdu[2].data*self.exptime/hdu[2].data
@@ -681,51 +681,6 @@ class HPFSpecList(object):
             coeffs.append(FC2.min_pv)
         return coeffs
     
-    def combine_specs(self,f_which='f_sci_sky_debl',w_which=None,combine_type='biweight',sigma_clip=5.):
-        """ Combine spectra in a list
-        
-        Resample and combine spectra. This routine does not do anything clever to maintain resolution,
-        so check that outputs are not dependent on, e.g., how much barycentric sampling there is.
-
-        Output is stored in combined_spec
-        
-        Parameters
-        ----------
-        f_which : {str}, optional
-            Which flux array to combine (the default is 'f_sci_sky_debl')
-        w_which : {str}, optional
-            Which wavelength array to use (the default is w_shifted - i.e. the stellar rest frame)
-        combine_type : {str}, optional
-            How to combine the spectra after resampling (the default is 'biweight')
-        sigma_clip : {number}, optional
-            If a sigma-clipped statistic is used for combining, the clip value (the default is 5.)
-        """
-        # For now, use the first spectrum as the baseline.
-        spec1 = self.splist[0]
-        # If w_which is not given: use cal_wave if f_cal/debl or cal_sky if f_sky/debl is used
-        # otherwise, just use w_shifted
-        if w_which is None:
-            if f_which in ['f_cal','f_cal_debl']:
-                w_which = 'cal_wave'
-            elif f_which in ['f_sky','f_sky_debl']:
-                w_which = 'sky_wave'
-            else:
-                w_which = 'w_shifted'
-        wl_base = getattr(spec1,w_which)
-        n_specs = len(self.splist)
-        out = np.full((28,2048),np.nan)
-
-        # For each spectrum, resample to the baseline wavelength grid and combine.
-        for oi in range(28):
-            warr = np.full((n_specs,2048),np.nan)
-            flarr = np.full((n_specs,2048),np.nan)
-            for si in range(n_specs):
-                spec_this = self.splist[si]
-                warr[si,:] = getattr(spec_this,w_which)[oi]
-                flarr[si,:] = getattr(spec_this,f_which)[oi]
-            order_combined = spec_help.resample_combine(wl_base[oi],warr,flarr,combine_type=combine_type,sigma_clip=sigma_clip)
-            out[oi,:] = order_combined
-        self.combined_spec = out
 
 class Chi2Function(object):
     def __init__(self,w,f1,e1,f2,e2,mask):
