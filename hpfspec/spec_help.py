@@ -14,6 +14,7 @@ import astropy.constants as aconst
 import seaborn as sns
 import scipy.interpolate
 import h5py
+import spectres
 import astropy.time
 import astropy.io
 import crosscorr
@@ -998,3 +999,155 @@ def calculate_ew(wl,fl,limit_left,limit_right):
     right_extra_val = (1. - fl[rightmost_index+1]) * right_extra_bin
     
     return(np.sum(sub) + left_extra_val + right_extra_val)
+
+def resample_interpolate(x,y,x_new,kind='cubic',fill_value=np.nan):
+    """ Simple interpolation-based resampling
+    
+    Just a wrapper around scipy.interpolate.interp1d.
+    
+    Parameters
+    ----------
+    x : {ndarray}
+        X-values to interpolate
+    y : {ndarray}
+        y-values to interpolate
+    x_new : {ndarray}
+        x-values to interpolate at
+    kind : {str}, optional
+        Kind of interpolation, argument to scipy.interpolate.interp1d. defaults to 'cubic'
+    fill_value : {float}, optional
+        Fill value for places where interpolation fails - defaults to np.nan
+    """
+    # Mask NaN
+    mask = np.ma.masked_invalid(y)
+    x_use = x[~mask.mask]
+    y_use = y[~mask.mask]
+    # Interpolate
+    interp_func = scipy.interpolate.interp1d(x_use,y_use,kind=kind,fill_value=fill_value,bounds_error=False)
+    return(interp_func(x_new))
+
+def resample_to_median_sampling(x,y,e=None,kind='FluxConservingSpectRes',fill_value=np.nan,upsample_factor=1.):
+    """ General-purpose resampling.
+    
+    Resampling routine, can do flux-conserving "spectres" resampling or simple interpolation.
+    
+    Parameters
+    ----------
+    x : {ndarray}
+        X-values to interpolate [if spectrum, in ang]
+    y : {ndarray}
+        y-values to interpolate
+    e : {ndarray}, optional
+        "error" array to resample - this is only relevant for kind=FluxConservingSpectRes, which assumes
+        a spectrum in flux vs wavelength, and an error array.
+    kind : {str}, optional
+        Kind of resampling/interpolation. Defaults to 'FluxConservingSpectRes'.
+        Also valid: any "kind" for scipy.interpolate.interp1d
+    fill_value : {float}, optional
+        Fill value for places where interpolation fails - defaults to np.nan
+    upsample_factor : {float}, optional
+        Up or down-sample a spectrum - defaults to 1. which is no change
+    """
+    # Find median size of x-bins, range, and number of points used
+    x_min = np.nanmin(x)
+    x_max = np.nanmax(x)
+    med_dx = np.nanmedian(np.diff(x))
+    if not isinstance(upsample_factor,int):
+        upsample_factor = int(upsample_factor)
+        print("Warning: Upsample factor converted to int")
+    # How many points are required to span the same range, with median sampling * upsample factor
+    n_pts = int((x_max - x_min) / med_dx) * upsample_factor
+    x_new = np.linspace(x_min,x_max,n_pts)
+    if kind in ['linear','nearest','zero','slinear','quadratic','cubic','previous','next']:
+        out = resample_interpolate(x,y,x_new,kind=kind,fill_value=fill_value)
+    elif kind in ['FluxConservingSpectRes']:
+        out = spectres.spectres(x_new, x, y, spec_errs=e, verbose=False)
+        if e is not None:
+            out, out_err = out[0], out[1]
+            return(x_new,out,out_err)
+    return(x_new,out)
+
+def resample_combine(wl_base,wlarr,flarr,combine_type='biweight',sigma_clip=5.):
+    """ Resample and combine spectra.
+    
+    Convenience function to resample and combine a bunch of spectra.
+    
+    Parameters
+    ----------
+    wl_base : {ndarray}
+        Base wavelength array, to resample on [ang]
+    wlarr : {ndarray} (n_specs x 2048)
+        Wavelength array for all spectra to combine [ang] 
+    flarr : {ndarray} (n_specs x 2048)
+        Flux array for all spectra
+    combine_type : {str}, optional
+        How to combine spectra - ['biweight','mean','median','sigmaclippedmean','sigmaclippedmedian'] 
+        (the default is 'biweight')
+    sigma_clip : {float}, optional
+        For sigma-clipped combinations, the clip limit (the default is 5.)
+    """
+    n_specs = len(flarr)
+    n_wls = len(wl_base)    
+    fullarr = np.full((n_specs,n_wls),np.nan)
+    # For each spectrum, resample to the array provided in wl_base
+    for si in range(n_specs):
+        resampled_fl = spectres.spectres(wl_base,wlarr[si],flarr[si],verbose=False)
+        fullarr[si,:] = resampled_fl
+
+    # Combine spectra
+    if combine_type == 'biweight':
+        out = astropy.stats.biweight.biweight_location(fullarr,axis=0,ignore_nan=True)
+    elif combine_type == 'mean':
+        out = np.nanmean(fullarr,axis=0)
+    elif combine_type == 'median':
+        out = np.nanmedian(fullarr,axis=0)
+    elif combine_type == 'sigmaclippedmean':
+        mask = np.ma.masked_invalid(fullarr)
+        out = astropy.stats.sigma_clipped_stats(fullarr,mask=mask,axis=0,sigma=sigma_clip)[0]
+    elif combine_type == 'sigmaclippedmedian':
+        mask = np.ma.masked_invalid(fullarr)
+        out = astropy.stats.sigma_clipped_stats(fullarr,mask=mask,axis=0,sigma=sigma_clip)[1]
+    else:
+        raise(UnhandledException('Invalid combine type'))
+    return(out)
+
+
+def renorm(wl,fl,regions,type='constant'):
+    if type == 'slope':
+        print('Renormalizing to slope')
+        ci_use = []
+        for clim in regions:
+            lower_lim = clim[0]
+            upper_lim = clim[1]
+            tmp_i = np.nonzero((wl >= lower_lim) & (wl <= upper_lim))[0]
+            if len(tmp_i) > 0:
+                for j in tmp_i:
+                    ci_use.append(j)
+            else:
+                print('No suitable pixels found for {:.2f} to {:.2f}'.format(lower_lim,upper_lim))
+        ww_fit = wl[ci_use]
+        ff_fit = fl[ci_use]
+        pp = np.polyfit(ww_fit,ff_fit,1)
+        norm = np.polyval(pp,wl)
+        fl = fl / norm
+    elif type == 'constant':
+        print('Renormalizing to constant value')
+        ci_use = []
+        for clim in regions:
+            lower_lim = clim[0]
+            upper_lim = clim[1]
+            tmp_i = np.nonzero((wl >= lower_lim) & (wl <= upper_lim))[0]
+            if len(tmp_i) > 0:
+                for j in tmp_i:
+                    ci_use.append(j)
+            else:
+                print('No suitable pixels found for {:.2f} to {:.2f}'.format(lower_lim,upper_lim))
+        if len(ci_use) > 0:
+            new_norm = astropy.stats.biweight_location(fl[ci_use])
+            print('New norm: {:.3}'.format(new_norm))
+            fl = fl / new_norm
+        else:
+            print('No renorm pixels found, skipping')
+    else:
+        print('No type available')
+    return(fl)

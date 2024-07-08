@@ -62,13 +62,7 @@ class Target(object):
         if (self.data['rv'] is None) | (self.data['rv'] == np.nan):
             self.rv = 0.
         else:
-<<<<<<< HEAD
-            self.rv = self.data['rv']/1000.# if self.data['rv'] < 1e20 else 0.
-        self.obsname = obsname
-
-=======
             self.rv = self.data['rv']/1000.
->>>>>>> c99c300c6901b7d105d72026fbec3f0edbc504f5
 
     def query_tic(self,ticname):
         """

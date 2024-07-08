@@ -24,13 +24,22 @@ PATH_WAVELENGTH = os.path.join(DIRNAME,"data/hpf/wavelength_solution/LFC_wavecal
 PATH_TARGETS = target.PATH_TARGETS
 
 class HPFSpectrum(object):
-    """
-    Yet another HPF Spectrum object. Can work with deblazed spectra.
+    """ An object containing HPF spectral data.
+    
+    General purpose object for containing and analyzing HPF data for a single data frame.
+    
+    Hard-coded Attributes (file paths and settings) include:
+    - Path to a deblazed flat
+    - Path to a "blazed" flat
+    - Path to a telluric mask
+    - Path to a sky line mask
+    - Path to a CCF mask
+    - Path to a wavelength solution
+    - Path to the target file directory
+    Many of these files will be in the data/ directory in the installation location for this package.
 
-    EXAMPLE:
-        H = HPFSpectrum(fitsfiles[1])
-        H.plot_order(14,deblazed=True)
     """
+
     path_flat_deblazed = PATH_FLAT_DEBLAZED
     path_flat_blazed = PATH_FLAT_BLAZED
     path_tellmask = PATH_TELLMASK
@@ -41,7 +50,44 @@ class HPFSpectrum(object):
     def __init__(self,filename,targetname='',deblaze=True,tell_err_factor=1.,ccf_redshift=True,
                  UseSERVALTemplate=False,
                  sky_err_factor=1.,sky_scaling_factor=1.0,
-                 verbose=False,setup_he10830=False,rv=0.,degrade_snr=None):
+                 verbose=False,setup_he10830=False,rv=0.,degrade_snr=None,target_kwargs={},keepsciHDU=False,keepflatHDU=False):
+        """ Create the HPF spectrum object.
+        
+        Instantiate an HPF spectrum object for a single data frame or model spectrum.
+        
+        Parameters
+        ----------
+        filename : {str}
+            Path to a 1D extracted spectrum data file (using the standard fits format, with SCI/SKY/CAL extensions)
+        targetname : {str}, optional
+            Simbad-resolvable name of target.
+        deblaze : {bool}, optional
+            Divide the spectrum by the "blazed" flat to remove the blaze (the default is True)
+        tell_err_factor : {float}, optional
+            Factor to use to scale uncertainties in the vicinity of telluric lines.
+        ccf_redshift : {bool}, optional
+            Use the CCF mask to measure the redshift and define the rest frame of the star (the default is True)
+        UseSERVALTemplate : {bool}, optional
+            The input data is a SERVAL template; take the fluxes and errors directly.
+        sky_err_factor : {float}, optional
+            Factor to use to scale uncertainties in the vicinity of sky emission lines.
+        sky_scaling_factor : {float}, optional
+            Scaling factor to adjust relative throughput of sky fiber relative to sci fiber.
+        verbose : {bool}, optional
+
+        setup_he10830 : {bool}, optional
+            Runs a few useful calculations to enable measurements of He 10830 line.
+        rv : {float}, optional
+            If not measuring ccf_redshift, use this to force a certain RV shift.
+        degrade_snr : {float}, optional
+            Manually reduce the SNR of the spectrum, this is the desired SNR to get to.
+        target_kwargs : {dict}, optional
+            Target keywords; use to provide target data in the case where name is not Simbad-able.
+        keepsciHDU : {bool}, optional
+            Retain the open HDU for the science fits file. (the default is False)
+        keepflatHDU : {bool}, optional
+            Retain the open HDU for the flat fits file. (the default is False)
+        """
 
         self.filename = filename
         self.basename = filename.split(os.sep)[-1]
@@ -63,6 +109,8 @@ class HPFSpectrum(object):
         self.header_flat = self.hdu_flat[0].header
         self.flat_sci = self.hdu_flat[1].data
         self.flat_sky = self.hdu_flat[2].data
+        # If the EXTRMETH keyword exists, this implies that the flat relative method was used and so we should not implement further flattening
+        # Set the flat arrays to one.
         if np.isin(list(self.header.keys()),'EXTRMETH').max():
             self.flat_sci = np.ones(self.hdu_flat[1].data.shape)
             self.flat_sky = np.ones(self.hdu_flat[2].data.shape)
@@ -162,6 +210,11 @@ class HPFSpectrum(object):
         if setup_he10830:
             self._setup_he10830()
 
+        if not keepsciHDU:
+            self.hdu.close()
+        if not keepflatHDU:
+            self.hdu_flat.close()
+
     def _setup_he10830(self,nmedfilt=7,interp='linear'):
         """
         Run some useful calculations for He 10830
@@ -196,7 +249,7 @@ class HPFSpectrum(object):
 
         INPUT:
             w - wavelength grid to interpolate on
-            o -
+            o - order index
 
         OUTPUT:
 
@@ -309,12 +362,15 @@ class HPFSpectrum(object):
             ff = rotbroad_help.broaden(ww,ff,vsini)
         return ff, ee
 
-    def deblaze(self):
+    def deblaze(self, norm_percentile_per_order=None):
         """
         Deblaze spectrum, make available with self.f_debl
         """
         if np.isin(list(self.header.keys()),'BLAZEFL').max():
-            hdu = astropy.io.fits.open( '/storage/group/sqm107/default/HPFPipeline/APCP/NewExtractionModule/{}'.format(self.hdu[0].header['BLAZEFL']) )
+            #hdu = astropy.io.fits.open( '/storage/group/sqm107/default/HPFPipeline/APCP/NewExtractionModule/{}'.format(self.hdu[0].header['BLAZEFL']) )
+            #data/hpf/flats/
+            self.path_flat_blazed = os.path.join(DIRNAME,self.hdu[0].header['BLAZEFL'])
+            hdu = astropy.io.fits.open(self.path_flat_blazed)
             self.f_sci_debl = self.hdu[1].data*self.exptime/hdu[1].data
             self.f_sky_debl = self.hdu[2].data*self.exptime/hdu[2].data
         elif not np.isin(list(self.header.keys()),'EXTRMETH').max():
@@ -335,6 +391,12 @@ class HPFSpectrum(object):
             if self.degrade_snr != None:
                 self.f_degrade_debl[i] = self.f_degrade_debl[i]/np.nanmedian(self.f_degrade_debl[i])
         self.e_debl = self.f_debl/self.sn
+
+        if norm_percentile_per_order is not None:
+            for i in range(28):
+                norm_val = np.nanpercentile(self.f_debl[i],norm_percentile_per_order)
+                self.f_debl[i] = self.f_debl[i] / norm_val
+                self.e_debl[i] = self.e_debl[i] / norm_val
 
     def redshift(self,berv=None,rv=None):
         """
@@ -618,6 +680,52 @@ class HPFSpecList(object):
                 FC2.plot_model(FC2.min_pv)
             coeffs.append(FC2.min_pv)
         return coeffs
+    
+    def combine_specs(self,f_which='f_sci_sky_debl',w_which=None,combine_type='biweight',sigma_clip=5.):
+        """ Combine spectra in a list
+        
+        Resample and combine spectra. This routine does not do anything clever to maintain resolution,
+        so check that outputs are not dependent on, e.g., how much barycentric sampling there is.
+
+        Output is stored in combined_spec
+        
+        Parameters
+        ----------
+        f_which : {str}, optional
+            Which flux array to combine (the default is 'f_sci_sky_debl')
+        w_which : {str}, optional
+            Which wavelength array to use (the default is w_shifted - i.e. the stellar rest frame)
+        combine_type : {str}, optional
+            How to combine the spectra after resampling (the default is 'biweight')
+        sigma_clip : {number}, optional
+            If a sigma-clipped statistic is used for combining, the clip value (the default is 5.)
+        """
+        # For now, use the first spectrum as the baseline.
+        spec1 = self.splist[0]
+        # If w_which is not given: use cal_wave if f_cal/debl or cal_sky if f_sky/debl is used
+        # otherwise, just use w_shifted
+        if w_which is None:
+            if f_which in ['f_cal','f_cal_debl']:
+                w_which = 'cal_wave'
+            elif f_which in ['f_sky','f_sky_debl']:
+                w_which = 'sky_wave'
+            else:
+                w_which = 'w_shifted'
+        wl_base = getattr(spec1,w_which)
+        n_specs = len(self.splist)
+        out = np.full((28,2048),np.nan)
+
+        # For each spectrum, resample to the baseline wavelength grid and combine.
+        for oi in range(28):
+            warr = np.full((n_specs,2048),np.nan)
+            flarr = np.full((n_specs,2048),np.nan)
+            for si in range(n_specs):
+                spec_this = self.splist[si]
+                warr[si,:] = getattr(spec_this,w_which)[oi]
+                flarr[si,:] = getattr(spec_this,f_which)[oi]
+            order_combined = spec_help.resample_combine(wl_base[oi],warr,flarr,combine_type=combine_type,sigma_clip=sigma_clip)
+            out[oi,:] = order_combined
+        self.combined_spec = out
 
 class Chi2Function(object):
     def __init__(self,w,f1,e1,f2,e2,mask):
