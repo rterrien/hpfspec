@@ -50,7 +50,8 @@ class HPFSpectrum(object):
     def __init__(self,filename,targetname='',deblaze=True,tell_err_factor=1.,ccf_redshift=True,
                  UseSERVALTemplate=False,
                  sky_err_factor=1.,sky_scaling_factor=1.0,
-                 verbose=False,setup_he10830=False,rv=0.,degrade_snr=None,target_kwargs={},keepsciHDU=False,keepflatHDU=False):
+                 verbose=False,setup_he10830=False,rv=0.,degrade_snr=None,target_kwargs={},keepsciHDU=False,keepflatHDU=False,
+                 path_flat_deblazed=None, path_flat_blazed=None):
         """ Create the HPF spectrum object.
         
         Instantiate an HPF spectrum object for a single data frame or model spectrum.
@@ -93,6 +94,14 @@ class HPFSpectrum(object):
         self.basename = filename.split(os.sep)[-1]
         self.sky_scaling_factor = sky_scaling_factor
         self.degrade_snr = degrade_snr
+
+        # replace flats if new ones provided:
+        if path_flat_blazed is not None:
+            print('Blazed Flat: replaced default: {}, using: {}'.format(self.path_flat_blazed,path_flat_blazed))
+            self.path_flat_blazed = path_flat_blazed            
+        if path_flat_deblazed is not None:
+            print('Deblazed Flat: replaced default: {}, using: {}'.format(self.path_flat_deblazed,path_flat_deblazed))
+            self.path_flat_deblazed = path_flat_deblazed
 
         # Read science frame
         self.hdu = astropy.io.fits.open(filename)
