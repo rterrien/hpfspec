@@ -200,7 +200,7 @@ class HPFSpectrum(object):
 
         if targetname=='':
             targetname = self.object
-        self.target = target.Target(targetname,verbose=verbose)
+        self.target = target.Target(targetname,verbose=verbose,**target_kwargs)
         self.bjd, self.berv = self.target.calc_barycentric_velocity(self.jd_midpoint,'McDonald Observatory')
 
         if ccf_redshift:
