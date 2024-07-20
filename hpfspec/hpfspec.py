@@ -51,7 +51,7 @@ class HPFSpectrum(object):
                  UseSERVALTemplate=False,
                  sky_err_factor=1.,sky_scaling_factor=1.0,
                  verbose=False,setup_he10830=False,rv=0.,degrade_snr=None,target_kwargs={},keepsciHDU=False,keepflatHDU=False,
-                 path_flat_deblazed=None, path_flat_blazed=None):
+                 path_flat_deblazed=None, path_flat_blazed=None, extraction_method=None):
         """ Create the HPF spectrum object.
         
         Instantiate an HPF spectrum object for a single data frame or model spectrum.
@@ -113,16 +113,30 @@ class HPFSpectrum(object):
         midpoint_keywords = ['JD_FW{}'.format(i) for i in range(28)]
         self.jd_midpoint = np.median(np.array([self.header[i] for i in midpoint_keywords]))
 
+        # what is the extraction method? This should control whether any flattening is performed 
+        # for this spectrum by default.
+        if extraction_method is not None:
+            assert extraction_method in ['optimal','flat-relative optimal']
+            self.extraction_method = extraction_method
+        elif np.isin(list(self.header.keys()),'EXTRMETH').max():
+            self.extraction_method = 'flat-relative optimal'
+        else:
+            self.extraction_method = 'optimal'
+
         # Read Flat
-        self.hdu_flat = astropy.io.fits.open(self.path_flat_deblazed)
-        self.header_flat = self.hdu_flat[0].header
-        self.flat_sci = self.hdu_flat[1].data
-        self.flat_sky = self.hdu_flat[2].data
-        # If the EXTRMETH keyword exists, this implies that the flat relative method was used and so we should not implement further flattening
-        # Set the flat arrays to one.
-        if np.isin(list(self.header.keys()),'EXTRMETH').max():
-            self.flat_sci = np.ones(self.hdu_flat[1].data.shape)
-            self.flat_sky = np.ones(self.hdu_flat[2].data.shape)
+        if self.extraction_method == 'flat-relative optimal':
+            self.flat_sci = np.ones_like(self.hdu[4].data)
+            self.flat_sky = np.ones_like(self.hdu[4].data)
+            self.flat_cal = np.ones_like(self.hdu[4].data)
+            self.hdu_flat = None
+            self.header_flat = None
+        elif self.extraction_method == 'optimal':
+            self.hdu_flat = astropy.io.fits.open(self.path_flat_deblazed)
+            self.header_flat = self.hdu_flat[0].header
+            self.flat_sci = self.hdu_flat[1].data
+            self.flat_sky = self.hdu_flat[2].data
+        else:
+            raise(Exception)
 
         if not UseSERVALTemplate:
             self.e_sci = np.sqrt(self.hdu[4].data)*self.exptime
@@ -221,7 +235,7 @@ class HPFSpectrum(object):
 
         if not keepsciHDU:
             self.hdu.close()
-        if not keepflatHDU:
+        if not keepflatHDU and (self.hdu_flat is not None):
             self.hdu_flat.close()
 
     def _setup_he10830(self,nmedfilt=7,interp='linear'):
@@ -378,28 +392,55 @@ class HPFSpectrum(object):
         if np.isin(list(self.header.keys()),'BLAZEFL').max():
             #hdu = astropy.io.fits.open( '/storage/group/sqm107/default/HPFPipeline/APCP/NewExtractionModule/{}'.format(self.hdu[0].header['BLAZEFL']) )
             #data/hpf/flats/
+            print('WARNING: USING BLAZE FILE FROM FITS HEADER:'.format(self.hdu[0].header['BLAZEFL']))
             self.path_flat_blazed = os.path.join(DIRNAME,'data','hpf','flats',self.hdu[0].header['BLAZEFL'])
             hdu = astropy.io.fits.open(self.path_flat_blazed)
             self.f_sci_debl = self.hdu[1].data*self.exptime/hdu[1].data
             self.f_sky_debl = self.hdu[2].data*self.exptime/hdu[2].data
-        elif not np.isin(list(self.header.keys()),'EXTRMETH').max():
+        elif self.extraction_method == 'optimal':
             hdu = astropy.io.fits.open(self.path_flat_blazed)
             self.f_sci_debl = self.hdu[1].data*self.exptime/hdu[1].data
             self.f_sky_debl = self.hdu[2].data*self.exptime/hdu[2].data
-        else:
+        elif self.extraction_method == 'flat-relative optimal':
             self.f_sci_debl = self.hdu[1].data*self.exptime
             self.f_sky_debl = self.hdu[2].data*self.exptime
+        else:
+            raise(Exception)
         self.f_debl = self.f_sci_debl-self.f_sky_debl*self.sky_scaling_factor
         if self.degrade_snr != None:
-            if not np.isin(list(self.header.keys()),'EXTRMETH').max():
+            if self.extraction_method == 'optimal':
                 self.f_degrade_debl = self.f_degrade/hdu[1].data
-            else:
+            elif self.extraction_method == 'flat-relative optimal':
                 self.f_degrade_debl = self.f_degrade
+            else:
+                raise(Exception)
+            
         for i in range(28):
             self.f_debl[i] = self.f_debl[i]/np.nanmedian(self.f_debl[i])
             if self.degrade_snr != None:
                 self.f_degrade_debl[i] = self.f_degrade_debl[i]/np.nanmedian(self.f_degrade_debl[i])
         self.e_debl = self.f_debl/self.sn
+
+        if norm_percentile_per_order is not None:
+            for i in range(28):
+                norm_val = np.nanpercentile(self.f_debl[i],norm_percentile_per_order)
+                self.f_debl[i] = self.f_debl[i] / norm_val
+                self.e_debl[i] = self.e_debl[i] / norm_val
+
+    def flatten_deblaze_separate(self, path_flat_deblazed, path_blaze, norm_percentile_per_order=None):
+        """
+        Deblaze and flatten spectrum, make available with self.f_debl
+        Use separate flats for the pixel-level and blaze
+        """
+        pixel_flat = astropy.io.fits.open(path_flat_deblazed)
+        blaze = astropy.io.fits.open(path_blaze)
+
+        self.f_sci_debl = self.hdu[1].data*self.exptime/pixel_flat[1].data/blaze[1].data
+        self.f_sky_debl = self.hdu[2].data*self.exptime/pixel_flat[2].data/blaze[2].data
+        self.f_debl = self.f_sci_debl-self.f_sky_debl*self.sky_scaling_factor
+
+        pixel_flat.close()
+        blaze.close()
 
         if norm_percentile_per_order is not None:
             for i in range(28):
