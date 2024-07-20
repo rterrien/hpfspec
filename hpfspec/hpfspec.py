@@ -394,7 +394,7 @@ class HPFSpectrum(object):
         if blaze_file_identified and (self.extraction_method=='flat-relative optimal'):
             #hdu = astropy.io.fits.open( '/storage/group/sqm107/default/HPFPipeline/APCP/NewExtractionModule/{}'.format(self.hdu[0].header['BLAZEFL']) )
             #data/hpf/flats/
-            print('WARNING: USING BLAZE FILE FROM FITS HEADER:'.format(self.header['BLAZEFL']))
+            print('WARNING: USING BLAZE FILE FROM FITS HEADER: {}'.format(self.header['BLAZEFL']))
             self.path_flat_blazed = os.path.join(DIRNAME,'data','hpf','flats',self.header['BLAZEFL'])
             hdu = astropy.io.fits.open(self.path_flat_blazed)
             self.f_sci_debl = self.hdu[1].data*self.exptime/hdu[1].data
