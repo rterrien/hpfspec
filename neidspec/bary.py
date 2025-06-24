@@ -43,7 +43,10 @@ def bjdbrv(jd_utc, ra=None, dec=None, obsname=None, lat=0., lon=0., elevation=No
         lat = 32.78000000000001 # astropy.coordinates.EarthLocation.of_site('APO').lat.deg
         lon = -105.82000000000002 # astropy.coordinates.EarthLocation.of_site('APO').lon.deg
         elevation = 2798. # astropy.coordinates.EarthLocation.of_site('APO').height
-
+    if obsname=='KPNO':
+        lat = 31.963333333333342
+        lon = -111.6
+        elevation = 2120.
     # Barycentric Julian Date
     # adapted from http://docs.astropy.org/en/stable/time/#barycentric-and-heliocentric-light-travel-time-corrections
     targ = coord.SkyCoord(ra, dec, unit=(u.deg, u.deg), frame='icrs')

@@ -94,7 +94,7 @@ class NEIDSpectrum(object):
 
     def __init__(self, filename, targetname='', deblaze=True, tell_err_factor=1., ccf_redshift=True,
                  sky_err_factor=1., sky_scaling_factor=1.0, verbose=False, setup_he10830=False, rv=0.,
-                 degrade_snr=None, add_vsini=10):
+                 degrade_snr=None, add_vsini=10, target_kwargs={}):
         self.filename = filename
         self.basename = filename.split(os.sep)[-1]
         self.sky_scaling_factor = sky_scaling_factor
@@ -108,7 +108,7 @@ class NEIDSpectrum(object):
         self.hdu = astropy.io.fits.open(filename)
         self.header = self.hdu[0].header
         self.exptime = self.header["EXPTIME"]
-        self.object = self.header["OBJECT"]
+        self.object = self.header["OBJECT"].replace(' ','_')
         try:
             self.qprog = self.header["QPROG"]
         except Exception:
@@ -168,8 +168,8 @@ class NEIDSpectrum(object):
         self.sn = self.f / self.e
         if targetname == '':
             targetname = self.object
-        self.target = target.Target(targetname, verbose=verbose)
-        self.bjd, self.berv = self.target.calc_barycentric_velocity(self.jd_midpoint, 'McDonald Observatory')
+        self.target = target.Target(targetname, verbose=verbose, **target_kwargs)
+        self.bjd, self.berv = self.target.calc_barycentric_velocity(self.jd_midpoint, 'KPNO')
         if ccf_redshift:
             if verbose:
                 print('Barycentric shifting')
